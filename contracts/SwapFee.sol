@@ -559,9 +559,9 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
         checkDeadline(params.deadline)
         returns (uint256 amountOut)
     {
-        require(params.routes.length == 2, "SwapX: only 2 routes supported");
+        require(params.routes.length == 2, "SwapFee: only 2 routes supported");
 
-        require(params.amountIn > 0, "SwapX: amount in is zero");
+        require(params.amountIn > 0, "SwapFee: amount in is zero");
 
         (address tokenIn, address tokenOut1, uint24 fee1) = params
             .path1
@@ -570,7 +570,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
         if (tokenIn == WETH || tokenIn == address(0)) {
             require(
                 msg.value >= params.amountIn,
-                "SwapX: amount in and value mismatch"
+                "SwapFee: amount in and value mismatch"
             );
             nativeIn = true;
             tokenIn = WETH;
@@ -578,7 +578,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
             uint amount = msg.value - params.amountIn;
             if (amount > 0) {
                 (bool success, ) = address(msg.sender).call{value: amount}("");
-                require(success, "SwapX: refund ETH error");
+                require(success, "SwapFee: refund ETH error");
             }
         }
         uint256 fee = takeFee(
@@ -631,7 +631,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
                 (bool success, ) = address(params.recipient).call{
                     value: amountOut - fee
                 }("");
-                require(success, "SwapX: send ETH out error");
+                require(success, "SwapFee: send ETH out error");
             }
         } else if (
             isStrEqual(params.routes[0], "v2") &&
@@ -681,7 +681,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
                 (bool success, ) = address(params.recipient).call{
                     value: amountOut - fee
                 }("");
-                require(success, "SwapX: send ETH out error");
+                require(success, "SwapFee: send ETH out error");
             }
         } else if (
             isStrEqual(params.routes[0], "v3") &&
@@ -732,12 +732,12 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
                 (bool success, ) = address(params.recipient).call{
                     value: amountOut - fee
                 }("");
-                require(success, "SwapX: send ETH out error");
+                require(success, "SwapFee: send ETH out error");
             }
         }
         require(
             amountOut >= params.amountOutMinimum,
-            "SwapX: too little received"
+            "SwapFee: too little received"
         );
     }
 
@@ -755,8 +755,8 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
             IWETH(WETH).transfer(recipient, value);
         } else if (payer == address(this)) {
             // pay with tokens already in the contract (for the exact input multihop case)
-            //IERC20(token).safeTransfer(recipient, value);
-            IERC20(token).transfer(recipient, value);
+            IERC20(token).safeTransfer(recipient, value);
+            // IERC20(token).transfer(recipient, value);
         } else {
             // pull payment
             IERC20(token).safeTransferFrom(payer, recipient, value);
