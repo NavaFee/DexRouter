@@ -2,7 +2,7 @@ const { expect } = require("chai");
 const { ethers, deployments } = require("hardhat");
 
 describe("交易功能测试", function () {
-  let swapFee;
+  let dexRouter;
   let owner;
   let admin;
   let trader;
@@ -20,7 +20,7 @@ describe("交易功能测试", function () {
 
     // 部署合约
     await deployments.fixture(["all"]);
-    swapFee = await ethers.getContract("SwapFee");
+    dexRouter = await ethers.getContract("DexRouter");
   });
 
   describe("V2单跳交易功能测试", function () {
