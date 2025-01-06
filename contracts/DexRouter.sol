@@ -312,7 +312,13 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             // either initiate the next swap or pay
             if (data.path.hasMultiplePools()) {
                 data.path = data.path.skipToken();
-                exactOutputInternal(amountToPay, msg.sender, 0, data);
+                exactOutputInternal(
+                    address(getPool(tokenIn, tokenOut, fee)),
+                    amountToPay,
+                    msg.sender,
+                    0,
+                    data
+                );
             } else {
                 amountInCached = amountToPay;
                 tokenIn = tokenOut; // swap in/out because exact output swaps are reversed
@@ -320,8 +326,10 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             }
         }
     }
-    /// @dev Performs a single exact output swap
+
+    /// Performs a single exact output swap
     function exactOutputInternal(
+        address poolAddress,
         uint256 amountOut,
         address recipient,
         uint160 sqrtPriceLimitX96,
@@ -330,17 +338,12 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         // allow swapping to the router address with address 0
         if (recipient == address(0)) recipient = address(this);
 
-        (address tokenOut, address tokenIn, uint24 fee) = data
-            .path
-            .decodeFirstPool();
+        (address tokenOut, address tokenIn, ) = data.path.decodeFirstPool();
 
         bool zeroForOne = tokenIn < tokenOut;
 
-        (int256 amount0Delta, int256 amount1Delta) = getPool(
-            tokenIn,
-            tokenOut,
-            fee
-        ).swap(
+        (int256 amount0Delta, int256 amount1Delta) = IUniswapV3Pool(poolAddress)
+            .swap(
                 recipient,
                 zeroForOne,
                 -amountOut.toInt256(),

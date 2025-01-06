@@ -26,13 +26,13 @@ describe("DexRouter 合约测试", function () {
   describe("初始化测试", function () {
     it("应该正确设置初始费率", async function () {
       const fee = await dexRouter.getFeeRate();
-      console.log("初始费率:", fee);
+      console.log("\t初始费率:", fee);
       expect(fee).to.equal(INITIAL_FEE);
     });
 
     it("应该正确设置初始手续费收集地址", async function () {
       const collector = await dexRouter.getFeeCollector();
-      console.log("初始手续费收集地址:", collector);
+      console.log("\t初始手续费收集地址:", collector);
       expect(collector).to.equal(feeCollector);
     });
 
@@ -46,10 +46,10 @@ describe("DexRouter 合约测试", function () {
     it("只有管理员可以设置新的管理员", async function () {
       // 当前管理员
       const currentAdmin = await dexRouter.owner();
-      console.log("当前管理员:", currentAdmin);
+      console.log("\t当前管理员:", currentAdmin);
       const newAdmin = user.address;
 
-      console.log("newAdmin:", newAdmin);
+      console.log("\tnewAdmin:", newAdmin);
       // 非管理员尝试设置新管理员应该失败
       await expect(dexRouter.connect(user).transferOwnership(newAdmin))
         .to.be.revertedWithCustomError(dexRouter, "OwnableUnauthorizedAccount")
@@ -57,10 +57,10 @@ describe("DexRouter 合约测试", function () {
 
       // 管理员设置新管理员应该成功
       await dexRouter.connect(owner).transferOwnership(newAdmin);
-      console.log("设置新管理员成功");
+      console.log("\t设置新管理员成功");
       // 新管理员
       const newAdminAddress = await dexRouter.owner();
-      console.log("新管理员:", newAdminAddress);
+      console.log("\t新管理员:", newAdminAddress);
       // 原管理员不能再设置新管理员
       await expect(dexRouter.connect(admin).transferOwnership(admin.address))
         .to.be.revertedWithCustomError(dexRouter, "OwnableUnauthorizedAccount")
@@ -79,7 +79,7 @@ describe("DexRouter 合约测试", function () {
       await dexRouter.connect(owner).setFeeCollector(newFeeCollector);
       // 验证新的费用收集者
       const collector = await dexRouter.getFeeCollector();
-      console.log("新费用收集者:", collector);
+      console.log("\t新费用收集者:", collector);
       expect(collector).to.equal(newFeeCollector);
     });
 
@@ -96,7 +96,7 @@ describe("DexRouter 合约测试", function () {
 
       // 验证新的费率
       const fee = await dexRouter.getFeeRate();
-      console.log("新费率:", fee);
+      console.log("\t新费率:", fee);
       expect(fee).to.equal(newFee);
     });
   });
