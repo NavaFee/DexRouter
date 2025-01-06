@@ -4,6 +4,7 @@ const {
   developmentChains,
 } = require("../helper-hardhat-config");
 require("dotenv").config();
+const fs = require("fs");
 
 module.exports = async function ({ getNamedAccounts, deployments }) {
   const { deploy, log } = deployments;
@@ -11,20 +12,27 @@ module.exports = async function ({ getNamedAccounts, deployments }) {
   const feeCollector = process.env.FeeCollector;
   const fee = 10000;
   const weth = process.env.ETH_SEPOLIA_WETH;
+  const aeroV2Router = process.env.BASE_AERO_V2_ROUTER;
+  const aeroV3Router = process.env.BASE_AERO_V3_ROUTER;
 
   log("----------------------------------------------------");
 
-  const args = [deployer, feeCollector, fee, weth];
-  console.log(args);
-  const swapFee = await deploy("SwapFee", {
+  const args = [feeCollector, fee, weth, aeroV2Router, aeroV3Router];
+  // console.log(args);
+  const dexRouter = await deploy("DexRouter", {
     from: deployer,
     args: args,
     log: true,
     waitConfirmations: network.config.blockConfirmations || 1,
   });
-  console.log("合约部署地址:", swapFee.address);
+  console.log("合约部署地址:", dexRouter.address);
+  const data = `\nDEX_ROUTER=${dexRouter.address}`;
+  // fs.writeFileSync(`./.env`, data); 追加到文件末尾
+  fs.appendFileSync(`./.env`, data);
+
+  // 将合约地址写入配置文件
 
   log("------------------------------------");
 };
 
-module.exports.tags = ["all", "swapFee", "main"];
+module.exports.tags = ["all", "dexRouter", "main"];
