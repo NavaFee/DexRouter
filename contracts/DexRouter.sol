@@ -11,7 +11,8 @@ import "./interfaces/IUniswapV2Pair.sol";
 import "./interfaces/IUniswapV3Pool.sol";
 import "./interfaces/IUniswapV3SwapCallback.sol";
 import "./interfaces/IWETH.sol";
-
+import "./interfaces/ISwapRouter.sol";
+import "./interfaces/IRouter.sol";
 import "./libs/Path.sol";
 import "./libs/SafeMath.sol";
 import "./libs/TickMath.sol";
@@ -19,11 +20,14 @@ import "./libs/UniswapV2Library.sol";
 import "./libs/CallbackValidation.sol";
 import "./Storage.sol";
 
-contract SwapFee is Storage, Ownable, ReentrancyGuard {
+contract DexRouter is Storage, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using SafeMath for uint;
     using Path for bytes;
     using SafeCast for uint256;
+
+    IRouter public aeroV2Router;
+    ISwapRouter public aeroV3Router;
 
     address public factoryV3;
     uint256 public amountInCached;
@@ -60,12 +64,16 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
     constructor(
         address _feeCollector,
         uint256 _fee,
-        address _weth
+        address _weth,
+        address _aeroV2Router,
+        address _aeroV3Router
     ) Ownable(msg.sender) {
         admin = msg.sender;
         feeCollector = _feeCollector;
         feeRate = _fee;
         WETH = _weth;
+        aeroV2Router = IRouter(_aeroV2Router);
+        aeroV3Router = ISwapRouter(_aeroV3Router);
     }
 
     // V2: Any swap, ExactIn single-hop - SupportingFeeOnTransferTokens
@@ -76,14 +84,14 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
         uint256 amountOutMin,
         address poolAddress
     ) public payable nonReentrant returns (uint amountOut) {
-        require(poolAddress != address(0), "SwapFee: invalid pool address");
-        require(amountIn > 0, "SwapFee: amount_in invalid");
+        require(poolAddress != address(0), "DexRouter: invalid pool address");
+        require(amountIn > 0, "DexRouter: amount_in invalid");
 
         bool nativeIn = false;
         if (tokenIn == address(0)) {
             require(
                 msg.value >= amountIn,
-                "SwapFee: amount in and value mismatch"
+                "DexRouter: amount in and value mismatch"
             );
             nativeIn = true;
             tokenIn = WETH;
@@ -91,7 +99,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
             uint amount = msg.value - amountIn;
             if (amount > 0) {
                 (bool success, ) = address(msg.sender).call{value: amount}("");
-                require(success, "SwapFee: refund ETH error");
+                require(success, "DexRouter: refund ETH error");
             }
         }
 
@@ -131,7 +139,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
             (bool success, ) = address(msg.sender).call{value: amountOut - fee}(
                 ""
             );
-            require(success, "SwapFee: send ETH out error");
+            require(success, "DexRouter: send ETH out error");
         } else {
             amountOut = IERC20(tokenOut).balanceOf(msg.sender).sub(
                 balanceBefore
@@ -139,7 +147,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
         }
         require(
             amountOut >= amountOutMin,
-            "SwapFee: insufficient output amount"
+            "DexRouter: insufficient output amount"
         );
     }
 
@@ -213,7 +221,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
         checkDeadline(params.deadline)
         returns (uint[] memory amounts)
     {
-        require(amountIn > 0, "SwapFee: amout in is zero");
+        require(amountIn > 0, "DexRouter: amout in is zero");
 
         uint length = params.path.length;
         bool nativeIn = false;
@@ -221,7 +229,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
         if (tokenIn == address(0)) {
             require(
                 msg.value >= amountIn,
-                "SwapFee: amount in and value mismatch"
+                "DexRouter: amount in and value mismatch"
             );
             nativeIn = true;
             tokenIn = WETH;
@@ -229,7 +237,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
             uint amount = msg.value - amountIn;
             if (amount > 0) {
                 (bool success, ) = address(msg.sender).call{value: amount}("");
-                require(success, "SwapFee: refund ETH error");
+                require(success, "DexRouter: refund ETH error");
             }
         }
         uint256 fee = takeFee(tokenIn, amountIn);
@@ -271,14 +279,14 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
         amounts[length - 1] = amountOut;
         require(
             amountOut >= params.amountOutMin,
-            "SwapFee: insufficient output amount"
+            "DexRouter: insufficient output amount"
         );
         if (nativeOut) {
             IWETH(WETH).withdraw(amountOut);
             (bool success, ) = address(params.recipient).call{value: amountOut}(
                 ""
             );
-            require(success, "SwapFee: send ETH out error");
+            require(success, "DexRouter: send ETH out error");
         }
     }
 
@@ -304,7 +312,13 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
             // either initiate the next swap or pay
             if (data.path.hasMultiplePools()) {
                 data.path = data.path.skipToken();
-                exactOutputInternal(amountToPay, msg.sender, 0, data);
+                exactOutputInternal(
+                    address(getPool(tokenIn, tokenOut, fee)),
+                    amountToPay,
+                    msg.sender,
+                    0,
+                    data
+                );
             } else {
                 amountInCached = amountToPay;
                 tokenIn = tokenOut; // swap in/out because exact output swaps are reversed
@@ -312,8 +326,10 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
             }
         }
     }
-    /// @dev Performs a single exact output swap
+
+    /// Performs a single exact output swap
     function exactOutputInternal(
+        address poolAddress,
         uint256 amountOut,
         address recipient,
         uint160 sqrtPriceLimitX96,
@@ -322,17 +338,12 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
         // allow swapping to the router address with address 0
         if (recipient == address(0)) recipient = address(this);
 
-        (address tokenOut, address tokenIn, uint24 fee) = data
-            .path
-            .decodeFirstPool();
+        (address tokenOut, address tokenIn, ) = data.path.decodeFirstPool();
 
         bool zeroForOne = tokenIn < tokenOut;
 
-        (int256 amount0Delta, int256 amount1Delta) = getPool(
-            tokenIn,
-            tokenOut,
-            fee
-        ).swap(
+        (int256 amount0Delta, int256 amount1Delta) = IUniswapV3Pool(poolAddress)
+            .swap(
                 recipient,
                 zeroForOne,
                 -amountOut.toInt256(),
@@ -397,19 +408,19 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
         checkDeadline(params.deadline)
         returns (uint256 amountOut)
     {
-        require(params.amountIn > 0, "SwapFee: amount in is zero");
+        require(params.amountIn > 0, "DexRouter: amount in is zero");
 
         if (params.tokenIn == address(0)) {
             params.tokenIn = WETH;
             require(
                 msg.value >= params.amountIn,
-                "SwapFee: amount in and value mismatch"
+                "DexRouter: amount in and value mismatch"
             );
             // refund
             uint amount = msg.value - params.amountIn;
             if (amount > 0) {
                 (bool success, ) = address(msg.sender).call{value: amount}("");
-                require(success, "SwapFee: refund ETH error");
+                require(success, "DexRouter: refund ETH error");
             }
         }
 
@@ -438,7 +449,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
 
         require(
             amountOut >= params.amountOutMinimum,
-            "SwapFee: insufficient out amount"
+            "DexRouter: insufficient out amount"
         );
 
         if (nativeOut) {
@@ -447,7 +458,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
                 ""
             );
 
-            require(success, "SwapFee: send ETH out error");
+            require(success, "DexRouter: send ETH out error");
         }
     }
 
@@ -461,17 +472,17 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
         checkDeadline(params.deadline)
         returns (uint256 amountOut)
     {
-        require(params.amountIn > 0, "SwapFee: amount in is zero");
+        require(params.amountIn > 0, "DexRouter: amount in is zero");
         if (msg.value > 0) {
             require(
                 msg.value >= params.amountIn,
-                "SwapFee: amount in and value mismatch"
+                "DexRouter: amount in and value mismatch"
             );
             // refund
             uint amount = msg.value - params.amountIn;
             if (amount > 0) {
                 (bool success, ) = address(msg.sender).call{value: amount}("");
-                require(success, "SwapFee: refund ETH error");
+                require(success, "DexRouter: refund ETH error");
             }
         }
 
@@ -516,14 +527,14 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
 
         require(
             amountOut >= params.amountOutMinimum,
-            "SwapFee: too little received"
+            "DexRouter: too little received"
         );
         if (params.nativeOut) {
             IWETH(WETH).withdraw(amountOut);
             (bool success, ) = address(params.recipient).call{value: amountOut}(
                 ""
             );
-            require(success, "SwapFee: send ETH out error");
+            require(success, "DexRouter: send ETH out error");
         }
     }
 
@@ -540,205 +551,6 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
                     PoolAddress.getPoolKey(tokenA, tokenB, fee)
                 )
             );
-    }
-
-    function isStrEqual(
-        string memory str1,
-        string memory str2
-    ) internal pure returns (bool) {
-        return keccak256(bytes(str1)) == keccak256(bytes(str2));
-    }
-
-    // Mixed: ExactIn multi-hop, token not supporting zero address
-    function swapMixedMultiHopExactIn(
-        ExactInputMixedParams memory params
-    )
-        public
-        payable
-        nonReentrant
-        checkDeadline(params.deadline)
-        returns (uint256 amountOut)
-    {
-        require(params.routes.length == 2, "SwapFee: only 2 routes supported");
-
-        require(params.amountIn > 0, "SwapFee: amount in is zero");
-
-        (address tokenIn, address tokenOut1, uint24 fee1) = params
-            .path1
-            .decodeFirstPool();
-        bool nativeIn = false;
-        if (tokenIn == WETH || tokenIn == address(0)) {
-            require(
-                msg.value >= params.amountIn,
-                "SwapFee: amount in and value mismatch"
-            );
-            nativeIn = true;
-            tokenIn = WETH;
-            // refund
-            uint amount = msg.value - params.amountIn;
-            if (amount > 0) {
-                (bool success, ) = address(msg.sender).call{value: amount}("");
-                require(success, "SwapFee: refund ETH error");
-            }
-        }
-        uint256 fee = takeFee(
-            tokenIn == WETH ? address(0) : tokenIn,
-            params.amountIn
-        );
-        params.amountIn = params.amountIn - fee;
-
-        if (
-            isStrEqual(params.routes[0], "v2") &&
-            isStrEqual(params.routes[1], "v2")
-        ) {
-            // uni - sushi, or verse
-            address poolAddress1 = params.poolAddress1; // UniswapV2Library.pairFor(params.factory1, tokenIn, tokenOut1);
-            if (nativeIn) {
-                pay(tokenIn, address(this), poolAddress1, params.amountIn);
-            } else pay(tokenIn, msg.sender, poolAddress1, params.amountIn);
-
-            address[] memory path1 = new address[](2);
-            path1[0] = tokenIn;
-            path1[1] = tokenOut1;
-
-            (, address tokenOut, ) = params.path2.decodeFirstPool();
-            address[] memory path2 = new address[](2);
-            path2[0] = tokenOut1;
-            path2[1] = tokenOut;
-            address poolAddress2 = params.poolAddress2; // UniswapV2Library.pairFor(params.factory2, tokenOut1, tokenOut);
-
-            bool nativeOut = tokenOut == WETH;
-
-            uint balanceBefore = IERC20(tokenOut).balanceOf(
-                nativeOut ? address(this) : params.recipient
-            );
-            _swapSupportingFeeOnTransferTokens(
-                path1,
-                poolAddress2,
-                params.factory1
-            );
-            _swapSupportingFeeOnTransferTokens(
-                path2,
-                nativeOut ? address(this) : params.recipient,
-                params.factory2
-            );
-            amountOut = IERC20(tokenOut)
-                .balanceOf(nativeOut ? address(this) : params.recipient)
-                .sub(balanceBefore);
-            if (nativeOut) {
-                IWETH(WETH).withdraw(amountOut);
-                fee = takeFee(address(0), amountOut);
-                (bool success, ) = address(params.recipient).call{
-                    value: amountOut - fee
-                }("");
-                require(success, "SwapFee: send ETH out error");
-            }
-        } else if (
-            isStrEqual(params.routes[0], "v2") &&
-            isStrEqual(params.routes[1], "v3")
-        ) {
-            address poolAddress1 = params.poolAddress1; //UniswapV2Library.pairFor(params.factory1, tokenIn, tokenOut1);
-            if (nativeIn) {
-                pay(tokenIn, address(this), poolAddress1, params.amountIn);
-            } else pay(tokenIn, msg.sender, poolAddress1, params.amountIn);
-
-            address[] memory path1 = new address[](2);
-            path1[0] = tokenIn;
-            path1[1] = tokenOut1;
-            uint[] memory amounts1 = UniswapV2Library.getAmountsOut(
-                params.factory1,
-                params.amountIn,
-                path1
-            );
-            uint amountOut1 = amounts1[amounts1.length - 1];
-
-            (, address tokenOut, ) = params.path2.decodeFirstPool();
-            bool nativeOut = tokenOut == WETH;
-            uint balanceBefore = IERC20(tokenOut).balanceOf(
-                nativeOut ? address(this) : params.recipient
-            );
-            _swapSupportingFeeOnTransferTokens(
-                path1,
-                address(this),
-                params.factory1
-            );
-
-            factoryV3 = params.factory2;
-            amountOut = exactInputInternal(
-                params.poolAddress2,
-                amountOut1,
-                nativeOut ? address(this) : params.recipient,
-                0,
-                SwapCallbackData({path: params.path2, payer: address(this)})
-            );
-            amountOut = IERC20(tokenOut)
-                .balanceOf(nativeOut ? address(this) : params.recipient)
-                .sub(balanceBefore);
-
-            if (nativeOut) {
-                IWETH(WETH).withdraw(amountOut);
-                fee = takeFee(address(0), amountOut);
-                (bool success, ) = address(params.recipient).call{
-                    value: amountOut - fee
-                }("");
-                require(success, "SwapFee: send ETH out error");
-            }
-        } else if (
-            isStrEqual(params.routes[0], "v3") &&
-            isStrEqual(params.routes[1], "v2")
-        ) {
-            (address tokenIn2, address tokenOut, ) = params
-                .path2
-                .decodeFirstPool();
-            address pairV2Address = params.poolAddress2; //UniswapV2Library.pairFor(params.factory2, tokenIn2, tokenOut);
-
-            factoryV3 = params.factory1;
-            uint amountOut1 = exactInputInternal(
-                params.poolAddress1,
-                params.amountIn,
-                pairV2Address,
-                0,
-                SwapCallbackData({
-                    path: abi.encodePacked(tokenIn, fee1, tokenOut1),
-                    payer: msg.sender
-                })
-            );
-
-            address[] memory path2 = new address[](2);
-            path2[0] = tokenIn2;
-            path2[1] = tokenOut;
-            uint[] memory amounts2 = UniswapV2Library.getAmountsOut(
-                params.factory2,
-                amountOut1,
-                path2
-            );
-            amountOut = amounts2[amounts2.length - 1];
-
-            bool nativeOut = tokenOut == WETH;
-            uint balanceBefore = IERC20(tokenOut).balanceOf(
-                nativeOut ? address(this) : params.recipient
-            );
-            _swapSupportingFeeOnTransferTokens(
-                path2,
-                nativeOut ? address(this) : params.recipient,
-                params.factory2
-            );
-            amountOut = IERC20(tokenOut)
-                .balanceOf(nativeOut ? address(this) : params.recipient)
-                .sub(balanceBefore);
-            if (nativeOut) {
-                IWETH(WETH).withdraw(amountOut);
-                fee = takeFee(address(0), amountOut);
-                (bool success, ) = address(params.recipient).call{
-                    value: amountOut - fee
-                }("");
-                require(success, "SwapFee: send ETH out error");
-            }
-        }
-        require(
-            amountOut >= params.amountOutMinimum,
-            "SwapFee: too little received"
-        );
     }
 
     // 处理代币支付逻辑
@@ -764,6 +576,156 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
         }
     }
 
+    // AMM Swap Functions
+    // 非原生代币 Swap 前需要先将 tokenIn 授权给合约
+    function AeroV2ExactInput(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        IRouter.Route[] calldata routes,
+        address to,
+        bool nativeIn,
+        bool nativeOut,
+        uint256 deadline
+    ) external payable checkDeadline(deadline) returns (uint256) {
+        require(amountIn > 0, "AeroDex: INSUFFICIENT_INPUT_AMOUNT");
+
+        // 收取手续费
+        uint256 fee = takeFee(routes[0].from, amountIn);
+        amountIn = amountIn - fee;
+
+        // 如果输入为ETH，将收到的ETH转换为WETH
+        if (nativeIn) {
+            IWETH(WETH).deposit{value: amountIn}();
+        } else {
+            // 转移 tokenIn 到 该合约
+            IERC20(routes[0].from).safeTransferFrom(
+                msg.sender,
+                address(this),
+                amountIn
+            );
+        }
+
+        // 再 将 tokenIn 授权给router合约
+        IERC20(routes[0].from).approve(address(aeroV2Router), amountIn);
+
+        uint256[] memory amounts;
+        // 如果输出为ETH，调用swapExactTokensForETH
+        if (nativeOut) {
+            amounts = aeroV2Router.swapExactTokensForETH(
+                amountIn,
+                amountOutMin,
+                routes,
+                to,
+                deadline
+            );
+        } else {
+            amounts = aeroV2Router.swapExactTokensForTokens(
+                amountIn,
+                amountOutMin,
+                routes,
+                to,
+                deadline
+            );
+        }
+        return amounts[amounts.length - 1];
+    }
+
+    // CL Swap Functions
+    function AeroV3ExactInputSingle(
+        ISwapRouter.ExactInputSingleParams memory params,
+        bool nativeIn,
+        bool nativeOut
+    )
+        external
+        payable
+        checkDeadline(params.deadline)
+        returns (uint256 amountOut)
+    {
+        require(params.amountIn > 0, "AeroDex: INSUFFICIENT_INPUT_AMOUNT");
+
+        // 收取手续费
+        uint256 fee = takeFee(params.tokenIn, params.amountIn);
+        params.amountIn = params.amountIn - fee;
+
+        // 如果输入为ETH，则先将ETH发送到合约地址,然后转换为WETH
+        if (nativeIn) {
+            IWETH(WETH).deposit{value: params.amountIn}();
+        } else {
+            // 转移 tokenIn 到合约
+            IERC20(params.tokenIn).transferFrom(
+                msg.sender,
+                address(this),
+                params.amountIn
+            );
+        }
+
+        // 再 将 tokenIn 授权给V3合约
+        IERC20(params.tokenIn).approve(address(aeroV3Router), params.amountIn);
+
+        uint256 amount;
+        address recipient = params.recipient;
+        // 如果输出为ETH，则先将WETH发送到合约地址,再发送ETH
+        if (nativeOut) {
+            params.recipient = address(this);
+            amount = aeroV3Router.exactInputSingle(params);
+
+            // 将WETH发送到recipient
+            IWETH(WETH).withdraw(amount);
+            (bool success, ) = payable(recipient).call{value: amount}("");
+            require(success, "AeroDex: ETH_TRANSFER_FAILED");
+        } else {
+            amount = aeroV3Router.exactInputSingle(params);
+        }
+        return amount;
+    }
+
+    function AeroV3ExactInput(
+        ISwapRouter.ExactInputParams memory params,
+        address tokenIn,
+        bool nativeIn,
+        bool nativeOut
+    )
+        external
+        payable
+        checkDeadline(params.deadline)
+        returns (uint256 amountOut)
+    {
+        require(params.amountIn > 0, "AeroDex: INSUFFICIENT_INPUT_AMOUNT");
+
+        // 收取手续费
+        uint256 fee = takeFee(tokenIn, params.amountIn);
+        params.amountIn = params.amountIn - fee;
+
+        if (nativeIn) {
+            IWETH(WETH).deposit{value: params.amountIn}();
+        } else {
+            // 转移 tokenIn 到合约
+            IERC20(tokenIn).transferFrom(
+                msg.sender,
+                address(this),
+                params.amountIn
+            );
+        }
+
+        // 再 将 tokenIn 授权给V3合约
+        IERC20(tokenIn).approve(address(aeroV3Router), params.amountIn);
+
+        uint256 amount;
+        address recipient = params.recipient;
+        // 如果输出为ETH，则先将WETH发送到合约地址,再发送ETH
+        if (nativeOut) {
+            params.recipient = address(this);
+            amount = aeroV3Router.exactInput(params);
+            // 将WETH发送到recipient
+            IWETH(WETH).withdraw(amount);
+            (bool success, ) = payable(recipient).call{value: amount}("");
+            require(success, "AeroDex: ETH_TRANSFER_FAILED");
+        } else {
+            amount = aeroV3Router.exactInput(params);
+        }
+        return amount;
+    }
+
     // 收取手续费，并且将手续费发送给手续费收集地址
     // mapping(address => uint256) UserFeeRate 可以考虑设置不同地址的手续费率
     function takeFee(
@@ -772,11 +734,21 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
     ) internal returns (uint256) {
         uint256 fee = amountIn.mul(feeRate).div(FEE_DENOMINATOR);
 
-        if (tokenIn == address(0) && address(this).balance > fee) {
+        if (
+            (tokenIn == address(0) || tokenIn == WETH) &&
+            msg.value >= amountIn &&
+            address(this).balance > fee
+        ) {
             // 处理原生代币的情况
             (bool success, ) = address(feeCollector).call{value: fee}("");
-            require(success, "SwapFee: take fee error");
+            require(success, "DexRouter: take fee error");
         } else {
+            // 检查 tokenIn 是否授权给合约
+            require(
+                IERC20(tokenIn).allowance(msg.sender, address(this)) >=
+                    amountIn,
+                "AeroDex: INSUFFICIENT_ALLOWANCE"
+            );
             // 处理 ERC20 代币的情况，包括 WETH
             IERC20(tokenIn).safeTransferFrom(msg.sender, feeCollector, fee);
         }
@@ -787,8 +759,7 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
     }
 
     // 设置手续费收集地址
-    function setFeeCollector(address _feeCollector) public {
-        require(msg.sender == admin, "Only admin can set fee collector");
+    function setFeeCollector(address _feeCollector) public onlyOwner {
         feeCollector = _feeCollector;
     }
 
@@ -798,19 +769,8 @@ contract SwapFee is Storage, Ownable, ReentrancyGuard {
     }
 
     // 设置手续费率
-    function setFeeRate(uint256 _fee) public {
-        require(msg.sender == admin, "Only admin can set fee");
+    function setFeeRate(uint256 _fee) public onlyOwner {
         feeRate = _fee;
-    }
-
-    function setAdmin(address _admin) public {
-        require(msg.sender == admin, "Only admin can set admin");
-        admin = _admin;
-    }
-
-    // 获取管理员地址
-    function getAdmin() public view returns (address) {
-        return admin;
     }
 
     // 获取手续费率

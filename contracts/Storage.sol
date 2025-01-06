@@ -36,20 +36,6 @@ contract Storage {
         bool nativeOut;
     }
 
-    struct ExactInputMixedParams {
-        string[] routes;
-        bytes path1;
-        address factory1;
-        address poolAddress1;
-        bytes path2;
-        address factory2;
-        address poolAddress2;
-        address recipient;
-        uint256 deadline;
-        uint256 amountIn;
-        uint256 amountOutMinimum;
-    }
-
     struct SwapCallbackData {
         bytes path;
         address payer;
