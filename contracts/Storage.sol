@@ -33,6 +33,7 @@ contract Storage {
         uint256 deadline;
         uint256 amountIn;
         uint256 amountOutMinimum;
+        address tokenOut;
         bool nativeOut;
     }
 

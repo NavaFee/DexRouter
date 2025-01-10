@@ -261,6 +261,7 @@ describe("UniswapTrade", function () {
           process.env.BASE_UNI_V3_FACTORY,
         ],
         nativeOut: false,
+        tokenOut: "0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825",
       };
 
       // 记录交易前余额

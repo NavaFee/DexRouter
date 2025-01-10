@@ -32,6 +32,9 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
     address public factoryV3;
     uint256 public amountInCached;
 
+    // 是否为手续费token
+    mapping(address => bool) public isFeeToken;
+
     // 管理员地址
     address private admin;
 
@@ -74,6 +77,39 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         WETH = _weth;
         aeroV2Router = IRouter(_aeroV2Router);
         aeroV3Router = ISwapRouter(_aeroV3Router);
+        isFeeToken[WETH] = true;
+        amountInCached = type(uint256).max;
+    }
+    // 收取手续费，并且将手续费发送给手续费收集地址
+    // mapping(address => uint256) UserFeeRate 可以考虑设置不同地址的手续费率
+    function takeFee(
+        address tokenIn,
+        uint256 amountIn
+    ) internal returns (uint256) {
+        uint256 fee = amountIn.mul(feeRate).div(FEE_DENOMINATOR);
+
+        if (
+            (tokenIn == address(0) || tokenIn == WETH) &&
+            msg.value >= amountIn &&
+            address(this).balance > fee
+        ) {
+            // 处理原生代币的情况
+            (bool success, ) = address(feeCollector).call{value: fee}("");
+            require(success, "DexRouter: take fee error");
+        } else {
+            // 检查 tokenIn 是否授权给合约
+            require(
+                IERC20(tokenIn).allowance(msg.sender, address(this)) >=
+                    amountIn,
+                "DexRouter: INSUFFICIENT_ALLOWANCE"
+            );
+            // 处理 ERC20 代币的情况，包括 WETH
+            IERC20(tokenIn).safeTransferFrom(msg.sender, feeCollector, fee);
+        }
+
+        emit FeeCollected(tokenIn, msg.sender, fee, block.timestamp);
+
+        return fee;
     }
 
     // V2: Any swap, ExactIn single-hop - SupportingFeeOnTransferTokens
@@ -83,9 +119,11 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         uint256 amountIn,
         uint256 amountOutMin,
         address poolAddress
-    ) public payable nonReentrant returns (uint amountOut) {
+    ) public payable nonReentrant returns (uint256 amountOut) {
         require(poolAddress != address(0), "DexRouter: invalid pool address");
         require(amountIn > 0, "DexRouter: amount_in invalid");
+
+        bool isFeeFromOut = takeFeeFromOut(tokenOut);
 
         bool nativeIn = false;
         if (tokenIn == address(0)) {
@@ -103,8 +141,10 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             }
         }
 
-        uint256 fee = takeFee(tokenIn, amountIn);
-        amountIn = amountIn - fee;
+        if (!isFeeFromOut) {
+            uint256 fee = takeFee(tokenIn, amountIn);
+            amountIn = amountIn - fee;
+        }
 
         // 处理支付
         if (nativeIn) {
@@ -128,18 +168,24 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             tokenIn
         );
 
-        address to = nativeOut ? address(this) : msg.sender;
+        address to = (nativeOut || isFeeFromOut) ? address(this) : msg.sender;
         pair.swap(amount0Out, amount1Out, to, new bytes(0));
 
-        if (nativeOut) {
-            amountOut = IERC20(WETH).balanceOf(address(this)).sub(
+        if (nativeOut || isFeeFromOut) {
+            amountOut = IERC20(tokenOut).balanceOf(address(this)).sub(
                 balanceBefore
             );
-            IWETH(WETH).withdraw(amountOut);
-            (bool success, ) = address(msg.sender).call{value: amountOut - fee}(
-                ""
-            );
-            require(success, "DexRouter: send ETH out error");
+            uint256 fee = takeFee(tokenOut, amountOut);
+            amountOut = amountOut - fee;
+            if (nativeOut) {
+                IWETH(WETH).withdraw(amountOut);
+                (bool success, ) = address(msg.sender).call{value: amountOut}(
+                    ""
+                );
+                require(success, "DexRouter: send ETH out error");
+            } else {
+                IERC20(tokenOut).safeTransfer(msg.sender, amountOut);
+            }
         } else {
             amountOut = IERC20(tokenOut).balanceOf(msg.sender).sub(
                 balanceBefore
@@ -225,6 +271,12 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
 
         uint length = params.path.length;
         bool nativeIn = false;
+        bool nativeOut = false;
+        address tokenOut = params.path[length - 1];
+        if (tokenOut == WETH) {
+            nativeOut = true;
+        }
+        bool isFeeFromOut = takeFeeFromOut(tokenOut);
 
         if (tokenIn == address(0)) {
             require(
@@ -240,15 +292,10 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
                 require(success, "DexRouter: refund ETH error");
             }
         }
-        uint256 fee = takeFee(tokenIn, amountIn);
-        amountIn = amountIn - fee;
-
-        bool nativeOut = false;
-        address tokenOut = params.path[length - 1];
-        if (tokenOut == WETH) {
-            nativeOut = true;
+        if (!isFeeFromOut) {
+            uint256 fee = takeFee(tokenIn, amountIn);
+            amountIn = amountIn - fee;
         }
-
         address firstPool = UniswapV2Library.pairFor(
             params.factory,
             params.path[0],
@@ -266,27 +313,35 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         );
 
         uint balanceBefore = IERC20(params.path[length - 1]).balanceOf(
-            nativeOut ? address(this) : params.recipient
+            (nativeOut || isFeeFromOut) ? address(this) : params.recipient
         );
         _swapSupportingFeeOnTransferTokens(
             params.path,
-            nativeOut ? address(this) : params.recipient,
+            (nativeOut || isFeeFromOut) ? address(this) : params.recipient,
             params.factory
         );
         uint amountOut = IERC20(params.path[length - 1])
-            .balanceOf(nativeOut ? address(this) : params.recipient)
+            .balanceOf(
+                (nativeOut || isFeeFromOut) ? address(this) : params.recipient
+            )
             .sub(balanceBefore);
         amounts[length - 1] = amountOut;
         require(
             amountOut >= params.amountOutMin,
             "DexRouter: insufficient output amount"
         );
-        if (nativeOut) {
-            IWETH(WETH).withdraw(amountOut);
-            (bool success, ) = address(params.recipient).call{value: amountOut}(
-                ""
-            );
-            require(success, "DexRouter: send ETH out error");
+        if (nativeOut || isFeeFromOut) {
+            uint fee = takeFee(tokenOut, amountOut);
+            amountOut = amountOut - fee;
+            if (nativeOut) {
+                IWETH(WETH).withdraw(amountOut);
+                (bool success, ) = address(params.recipient).call{
+                    value: amountOut
+                }("");
+                require(success, "DexRouter: send ETH out error");
+            } else {
+                IERC20(tokenOut).safeTransfer(params.recipient, amountOut);
+            }
         }
     }
 
@@ -410,6 +465,8 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
     {
         require(params.amountIn > 0, "DexRouter: amount in is zero");
 
+        bool isFeeFromOut = takeFeeFromOut(params.tokenOut);
+
         if (params.tokenIn == address(0)) {
             params.tokenIn = WETH;
             require(
@@ -424,18 +481,20 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             }
         }
 
-        uint256 fee = takeFee(params.tokenIn, params.amountIn);
-        params.amountIn = params.amountIn - fee;
-
         bool nativeOut = false;
         if (params.tokenOut == WETH) nativeOut = true;
+
+        if (!isFeeFromOut) {
+            uint256 fee = takeFee(params.tokenIn, params.amountIn);
+            params.amountIn = params.amountIn - fee;
+        }
 
         // update factoryV3 globally, so as to pass callback verification
         factoryV3 = params.factoryAddress;
         amountOut = exactInputInternal(
             params.poolAddress,
             params.amountIn,
-            nativeOut ? address(0) : params.recipient,
+            (nativeOut || isFeeFromOut) ? address(0) : params.recipient,
             params.sqrtPriceLimitX96,
             SwapCallbackData({
                 path: abi.encodePacked(
@@ -452,13 +511,21 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             "DexRouter: insufficient out amount"
         );
 
-        if (nativeOut) {
-            IWETH(WETH).withdraw(amountOut);
-            (bool success, ) = address(params.recipient).call{value: amountOut}(
-                ""
-            );
-
-            require(success, "DexRouter: send ETH out error");
+        if (nativeOut || isFeeFromOut) {
+            uint fee = takeFee(params.tokenOut, amountOut);
+            amountOut = amountOut - fee;
+            if (nativeOut) {
+                IWETH(WETH).withdraw(amountOut);
+                (bool success, ) = address(params.recipient).call{
+                    value: amountOut
+                }("");
+                require(success, "DexRouter: send ETH out error");
+            } else {
+                IERC20(params.tokenOut).safeTransfer(
+                    params.recipient,
+                    amountOut
+                );
+            }
         }
     }
 
@@ -490,8 +557,12 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         if (tokenIn == address(0)) {
             tokenIn = WETH;
         }
-        uint256 fee = takeFee(tokenIn, params.amountIn);
-        params.amountIn = params.amountIn - fee;
+
+        bool isFeeFromOut = takeFeeFromOut(params.tokenOut);
+        if (!isFeeFromOut) {
+            uint256 fee = takeFee(tokenIn, params.amountIn);
+            params.amountIn = params.amountIn - fee;
+        }
 
         address payer = msg.sender; // msg.sender pays for the first hop
 
@@ -506,7 +577,11 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
                 params.amountIn,
                 hasMultiplePools
                     ? address(this)
-                    : (params.nativeOut ? address(this) : params.recipient),
+                    : (
+                        (params.nativeOut || isFeeFromOut)
+                            ? address(this)
+                            : params.recipient
+                    ),
                 0,
                 SwapCallbackData({
                     path: params.path.getFirstPool(),
@@ -529,12 +604,22 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             amountOut >= params.amountOutMinimum,
             "DexRouter: too little received"
         );
-        if (params.nativeOut) {
-            IWETH(WETH).withdraw(amountOut);
-            (bool success, ) = address(params.recipient).call{value: amountOut}(
-                ""
-            );
-            require(success, "DexRouter: send ETH out error");
+        if (params.nativeOut || isFeeFromOut) {
+            uint fee = takeFee(params.tokenOut, amountOut);
+            amountOut = amountOut - fee;
+
+            if (params.nativeOut) {
+                IWETH(WETH).withdraw(amountOut);
+                (bool success, ) = address(params.recipient).call{
+                    value: amountOut
+                }("");
+                require(success, "DexRouter: send ETH out error");
+            } else {
+                IERC20(params.tokenOut).safeTransfer(
+                    params.recipient,
+                    amountOut
+                );
+            }
         }
     }
 
@@ -586,12 +671,16 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         bool nativeIn,
         bool nativeOut,
         uint256 deadline
-    ) external payable checkDeadline(deadline) returns (uint256) {
-        require(amountIn > 0, "AeroDex: INSUFFICIENT_INPUT_AMOUNT");
+    ) external payable checkDeadline(deadline) returns (uint256 amountOut) {
+        require(amountIn > 0, "DexRouter: INSUFFICIENT_INPUT_AMOUNT");
 
-        // 收取手续费
-        uint256 fee = takeFee(routes[0].from, amountIn);
-        amountIn = amountIn - fee;
+        address tokenOut = routes[routes.length - 1].to;
+        bool isFeeFromOut = takeFeeFromOut(tokenOut);
+
+        if (!isFeeFromOut) {
+            uint256 fee = takeFee(routes[0].from, amountIn);
+            amountIn = amountIn - fee;
+        }
 
         // 如果输入为ETH，将收到的ETH转换为WETH
         if (nativeIn) {
@@ -610,24 +699,32 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
 
         uint256[] memory amounts;
         // 如果输出为ETH，调用swapExactTokensForETH
-        if (nativeOut) {
-            amounts = aeroV2Router.swapExactTokensForETH(
-                amountIn,
-                amountOutMin,
-                routes,
-                to,
-                deadline
-            );
-        } else {
-            amounts = aeroV2Router.swapExactTokensForTokens(
-                amountIn,
-                amountOutMin,
-                routes,
-                to,
-                deadline
-            );
+
+        amounts = aeroV2Router.swapExactTokensForTokens(
+            amountIn,
+            amountOutMin,
+            routes,
+            (nativeOut || isFeeFromOut) ? address(this) : to,
+            deadline
+        );
+
+        amountOut = amounts[amounts.length - 1];
+        require(
+            amountOut >= amountOutMin,
+            "DexRouter: INSUFFICIENT_OUTPUT_AMOUNT"
+        );
+        if (nativeOut || isFeeFromOut) {
+            uint fee = takeFee(tokenOut, amountOut);
+            amountOut = amountOut - fee;
+
+            if (nativeOut) {
+                IWETH(WETH).withdraw(amountOut);
+                (bool success, ) = address(to).call{value: amountOut}("");
+                require(success, "DexRouter: send ETH out error");
+            } else {
+                IERC20(tokenOut).safeTransfer(to, amountOut);
+            }
         }
-        return amounts[amounts.length - 1];
     }
 
     // CL Swap Functions
@@ -641,11 +738,13 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         checkDeadline(params.deadline)
         returns (uint256 amountOut)
     {
-        require(params.amountIn > 0, "AeroDex: INSUFFICIENT_INPUT_AMOUNT");
+        require(params.amountIn > 0, "DexRouter: INSUFFICIENT_INPUT_AMOUNT");
 
-        // 收取手续费
-        uint256 fee = takeFee(params.tokenIn, params.amountIn);
-        params.amountIn = params.amountIn - fee;
+        bool isFeeFromOut = takeFeeFromOut(params.tokenOut);
+        if (!isFeeFromOut) {
+            uint256 fee = takeFee(params.tokenIn, params.amountIn);
+            params.amountIn = params.amountIn - fee;
+        }
 
         // 如果输入为ETH，则先将ETH发送到合约地址,然后转换为WETH
         if (nativeIn) {
@@ -662,26 +761,33 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         // 再 将 tokenIn 授权给V3合约
         IERC20(params.tokenIn).approve(address(aeroV3Router), params.amountIn);
 
-        uint256 amount;
         address recipient = params.recipient;
         // 如果输出为ETH，则先将WETH发送到合约地址,再发送ETH
-        if (nativeOut) {
+        if (nativeOut || isFeeFromOut) {
             params.recipient = address(this);
-            amount = aeroV3Router.exactInputSingle(params);
+            amountOut = aeroV3Router.exactInputSingle(params);
 
-            // 将WETH发送到recipient
-            IWETH(WETH).withdraw(amount);
-            (bool success, ) = payable(recipient).call{value: amount}("");
-            require(success, "AeroDex: ETH_TRANSFER_FAILED");
+            uint fee = takeFee(params.tokenOut, amountOut);
+            amountOut = amountOut - fee;
+
+            if (nativeOut) {
+                IWETH(WETH).withdraw(amountOut);
+                (bool success, ) = address(recipient).call{value: amountOut}(
+                    ""
+                );
+                require(success, "DexRouter: send ETH out error");
+            } else {
+                IERC20(params.tokenOut).safeTransfer(recipient, amountOut);
+            }
         } else {
-            amount = aeroV3Router.exactInputSingle(params);
+            amountOut = aeroV3Router.exactInputSingle(params);
         }
-        return amount;
     }
 
     function AeroV3ExactInput(
         ISwapRouter.ExactInputParams memory params,
         address tokenIn,
+        address tokenOut,
         bool nativeIn,
         bool nativeOut
     )
@@ -690,11 +796,13 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         checkDeadline(params.deadline)
         returns (uint256 amountOut)
     {
-        require(params.amountIn > 0, "AeroDex: INSUFFICIENT_INPUT_AMOUNT");
+        require(params.amountIn > 0, "DexRouter: INSUFFICIENT_INPUT_AMOUNT");
 
-        // 收取手续费
-        uint256 fee = takeFee(tokenIn, params.amountIn);
-        params.amountIn = params.amountIn - fee;
+        bool isFeeFromOut = takeFeeFromOut(tokenOut);
+        if (!isFeeFromOut) {
+            uint256 fee = takeFee(tokenIn, params.amountIn);
+            params.amountIn = params.amountIn - fee;
+        }
 
         if (nativeIn) {
             IWETH(WETH).deposit{value: params.amountIn}();
@@ -710,52 +818,34 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         // 再 将 tokenIn 授权给V3合约
         IERC20(tokenIn).approve(address(aeroV3Router), params.amountIn);
 
-        uint256 amount;
         address recipient = params.recipient;
         // 如果输出为ETH，则先将WETH发送到合约地址,再发送ETH
-        if (nativeOut) {
+        if (nativeOut || isFeeFromOut) {
             params.recipient = address(this);
-            amount = aeroV3Router.exactInput(params);
-            // 将WETH发送到recipient
-            IWETH(WETH).withdraw(amount);
-            (bool success, ) = payable(recipient).call{value: amount}("");
-            require(success, "AeroDex: ETH_TRANSFER_FAILED");
+            amountOut = aeroV3Router.exactInput(params);
+
+            uint fee = takeFee(tokenOut, amountOut);
+            amountOut = amountOut - fee;
+
+            if (nativeOut) {
+                IWETH(WETH).withdraw(amountOut);
+                (bool success, ) = address(recipient).call{value: amountOut}(
+                    ""
+                );
+                require(success, "DexRouter: send ETH out error");
+            } else {
+                IERC20(tokenOut).safeTransfer(recipient, amountOut);
+            }
         } else {
-            amount = aeroV3Router.exactInput(params);
+            amountOut = aeroV3Router.exactInput(params);
         }
-        return amount;
     }
-
-    // 收取手续费，并且将手续费发送给手续费收集地址
-    // mapping(address => uint256) UserFeeRate 可以考虑设置不同地址的手续费率
-    function takeFee(
-        address tokenIn,
-        uint256 amountIn
-    ) internal returns (uint256) {
-        uint256 fee = amountIn.mul(feeRate).div(FEE_DENOMINATOR);
-
-        if (
-            (tokenIn == address(0) || tokenIn == WETH) &&
-            msg.value >= amountIn &&
-            address(this).balance > fee
-        ) {
-            // 处理原生代币的情况
-            (bool success, ) = address(feeCollector).call{value: fee}("");
-            require(success, "DexRouter: take fee error");
-        } else {
-            // 检查 tokenIn 是否授权给合约
-            require(
-                IERC20(tokenIn).allowance(msg.sender, address(this)) >=
-                    amountIn,
-                "AeroDex: INSUFFICIENT_ALLOWANCE"
-            );
-            // 处理 ERC20 代币的情况，包括 WETH
-            IERC20(tokenIn).safeTransferFrom(msg.sender, feeCollector, fee);
+    // 判断是否从 Out 扣除手续费
+    function takeFeeFromOut(address tokenOut) internal view returns (bool) {
+        if (tokenOut == address(0) || isFeeToken[tokenOut]) {
+            return true;
         }
-
-        emit FeeCollected(tokenIn, msg.sender, fee, block.timestamp);
-
-        return fee;
+        return false;
     }
 
     // 设置手续费收集地址
@@ -776,6 +866,22 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
     // 获取手续费率
     function getFeeRate() public view returns (uint256) {
         return feeRate;
+    }
+
+    // 设置手续费优先币种
+    function setFeeTokens(
+        address[] calldata tokens,
+        bool[] calldata values
+    ) external onlyOwner {
+        require(tokens.length == values.length, "Invalid input");
+        for (uint256 i = 0; i < tokens.length; i++) {
+            isFeeToken[tokens[i]] = values[i];
+        }
+    }
+
+    // 查询手续费优先币种
+    function checkIsFeeToken(address token) public view returns (bool) {
+        return isFeeToken[token];
     }
 
     // 提取合约中的代币

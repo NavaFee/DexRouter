@@ -30,7 +30,11 @@ module.exports = async function ({ getNamedAccounts, deployments }) {
   // fs.writeFileSync(`./.env`, data); 追加到文件末尾
   fs.appendFileSync(`./.env`, data);
 
-  // 将合约地址写入配置文件
+  const feeToken = [process.env.BASE_USDC, process.env.BASE_USDT];
+  const isFee = [true, true];
+
+  
+
 
   log("------------------------------------");
 };

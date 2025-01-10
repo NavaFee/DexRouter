@@ -317,7 +317,7 @@ describe("AeroTrade", function () {
   });
 
   describe("AeroV3 Multi Route Swap", function () {
-    it("Should swap WETH to USDC through V3 multi route ( ETH -> USDC -> STAR )", async function () {
+    it("Should swap WETH to STAR through V3 multi route ( ETH -> USDC -> STAR )", async function () {
       const { dexRouter, star, usdc, owner, feeCollector } = await loadFixture(
         deployFixture
       );
@@ -357,6 +357,7 @@ describe("AeroTrade", function () {
       await dexRouter.AeroV3ExactInput(
         params,
         process.env.BASE_WETH,
+        process.env.BASE_STAR, // tokenOut
         true, // nativeIn
         false, // nativeOut
         {
