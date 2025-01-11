@@ -396,11 +396,11 @@ describe("UniswapTrade", function () {
       const beforeFeeCollectorUSDCBalance = await usdc.balanceOf(
         feeCollector.address
       );
-      console.log("\tbeforeUsdcBalance:", beforeUsdcBalance);
-      console.log(
-        "\tbeforeFeeCollectorUSDCBalance:",
-        beforeFeeCollectorUSDCBalance
-      );
+      // console.log("\tbeforeUsdcBalance:", beforeUsdcBalance);
+      // console.log(
+      //   "\tbeforeFeeCollectorUSDCBalance:",
+      //   beforeFeeCollectorUSDCBalance
+      // );
 
       // 执行交易
       await dexRouter.swapV2MultiHopExactIn(
@@ -420,11 +420,11 @@ describe("UniswapTrade", function () {
       const afterFeeCollectorUSDCBalance = await usdc.balanceOf(
         feeCollector.address
       );
-      console.log("\tafterUsdcBalance:", afterUsdcBalance);
-      console.log(
-        "\tafterFeeCollectorUSDCBalance:",
-        afterFeeCollectorUSDCBalance
-      );
+      // console.log("\tafterUsdcBalance:", afterUsdcBalance);
+      // console.log(
+      //   "\tafterFeeCollectorUSDCBalance:",
+      //   afterFeeCollectorUSDCBalance
+      // );
 
       expect(afterUsdcBalance).to.be.gt(beforeUsdcBalance);
       expect(
