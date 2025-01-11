@@ -84,27 +84,31 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
     // mapping(address => uint256) UserFeeRate 可以考虑设置不同地址的手续费率
     function takeFee(
         address tokenIn,
-        uint256 amountIn
+        uint256 amountIn,
+        bool isFeeFromOut
     ) internal returns (uint256) {
         uint256 fee = amountIn.mul(feeRate).div(FEE_DENOMINATOR);
-
-        if (
-            (tokenIn == address(0) || tokenIn == WETH) &&
-            msg.value >= amountIn &&
-            address(this).balance > fee
-        ) {
-            // 处理原生代币的情况
-            (bool success, ) = address(feeCollector).call{value: fee}("");
-            require(success, "DexRouter: take fee error");
+        if (isFeeFromOut) {
+            IERC20(tokenIn).safeTransferFrom(address(this), feeCollector, fee);
         } else {
-            // 检查 tokenIn 是否授权给合约
-            require(
-                IERC20(tokenIn).allowance(msg.sender, address(this)) >=
-                    amountIn,
-                "DexRouter: INSUFFICIENT_ALLOWANCE"
-            );
-            // 处理 ERC20 代币的情况，包括 WETH
-            IERC20(tokenIn).safeTransferFrom(msg.sender, feeCollector, fee);
+            if (
+                (tokenIn == address(0) || tokenIn == WETH) &&
+                msg.value >= amountIn &&
+                address(this).balance > fee
+            ) {
+                // 处理原生代币的情况
+                (bool success, ) = address(feeCollector).call{value: fee}("");
+                require(success, "DexRouter: take fee error");
+            } else {
+                // 检查 tokenIn 是否授权给合约
+                require(
+                    IERC20(tokenIn).allowance(msg.sender, address(this)) >=
+                        amountIn,
+                    "DexRouter: INSUFFICIENT_ALLOWANCE"
+                );
+                // 处理 ERC20 代币的情况，包括 WETH
+                IERC20(tokenIn).safeTransferFrom(msg.sender, feeCollector, fee);
+            }
         }
 
         emit FeeCollected(tokenIn, msg.sender, fee, block.timestamp);
@@ -142,7 +146,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         }
 
         if (!isFeeFromOut) {
-            uint256 fee = takeFee(tokenIn, amountIn);
+            uint256 fee = takeFee(tokenIn, amountIn, isFeeFromOut);
             amountIn = amountIn - fee;
         }
 
@@ -175,7 +179,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             amountOut = IERC20(tokenOut).balanceOf(address(this)).sub(
                 balanceBefore
             );
-            uint256 fee = takeFee(tokenOut, amountOut);
+            uint256 fee = takeFee(tokenOut, amountOut, isFeeFromOut);
             amountOut = amountOut - fee;
             if (nativeOut) {
                 IWETH(WETH).withdraw(amountOut);
@@ -293,7 +297,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             }
         }
         if (!isFeeFromOut) {
-            uint256 fee = takeFee(tokenIn, amountIn);
+            uint256 fee = takeFee(tokenIn, amountIn, isFeeFromOut);
             amountIn = amountIn - fee;
         }
         address firstPool = UniswapV2Library.pairFor(
@@ -331,7 +335,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             "DexRouter: insufficient output amount"
         );
         if (nativeOut || isFeeFromOut) {
-            uint fee = takeFee(tokenOut, amountOut);
+            uint fee = takeFee(tokenOut, amountOut, isFeeFromOut);
             amountOut = amountOut - fee;
             if (nativeOut) {
                 IWETH(WETH).withdraw(amountOut);
@@ -485,7 +489,11 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         if (params.tokenOut == WETH) nativeOut = true;
 
         if (!isFeeFromOut) {
-            uint256 fee = takeFee(params.tokenIn, params.amountIn);
+            uint256 fee = takeFee(
+                params.tokenIn,
+                params.amountIn,
+                isFeeFromOut
+            );
             params.amountIn = params.amountIn - fee;
         }
 
@@ -512,7 +520,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         );
 
         if (nativeOut || isFeeFromOut) {
-            uint fee = takeFee(params.tokenOut, amountOut);
+            uint fee = takeFee(params.tokenOut, amountOut, isFeeFromOut);
             amountOut = amountOut - fee;
             if (nativeOut) {
                 IWETH(WETH).withdraw(amountOut);
@@ -560,7 +568,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
 
         bool isFeeFromOut = takeFeeFromOut(params.tokenOut);
         if (!isFeeFromOut) {
-            uint256 fee = takeFee(tokenIn, params.amountIn);
+            uint256 fee = takeFee(tokenIn, params.amountIn, isFeeFromOut);
             params.amountIn = params.amountIn - fee;
         }
 
@@ -605,7 +613,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             "DexRouter: too little received"
         );
         if (params.nativeOut || isFeeFromOut) {
-            uint fee = takeFee(params.tokenOut, amountOut);
+            uint fee = takeFee(params.tokenOut, amountOut, isFeeFromOut);
             amountOut = amountOut - fee;
 
             if (params.nativeOut) {
@@ -678,7 +686,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         bool isFeeFromOut = takeFeeFromOut(tokenOut);
 
         if (!isFeeFromOut) {
-            uint256 fee = takeFee(routes[0].from, amountIn);
+            uint256 fee = takeFee(routes[0].from, amountIn, isFeeFromOut);
             amountIn = amountIn - fee;
         }
 
@@ -714,7 +722,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             "DexRouter: INSUFFICIENT_OUTPUT_AMOUNT"
         );
         if (nativeOut || isFeeFromOut) {
-            uint fee = takeFee(tokenOut, amountOut);
+            uint fee = takeFee(tokenOut, amountOut, isFeeFromOut);
             amountOut = amountOut - fee;
 
             if (nativeOut) {
@@ -742,7 +750,11 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
 
         bool isFeeFromOut = takeFeeFromOut(params.tokenOut);
         if (!isFeeFromOut) {
-            uint256 fee = takeFee(params.tokenIn, params.amountIn);
+            uint256 fee = takeFee(
+                params.tokenIn,
+                params.amountIn,
+                isFeeFromOut
+            );
             params.amountIn = params.amountIn - fee;
         }
 
@@ -767,7 +779,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             params.recipient = address(this);
             amountOut = aeroV3Router.exactInputSingle(params);
 
-            uint fee = takeFee(params.tokenOut, amountOut);
+            uint fee = takeFee(params.tokenOut, amountOut, isFeeFromOut);
             amountOut = amountOut - fee;
 
             if (nativeOut) {
@@ -800,7 +812,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
 
         bool isFeeFromOut = takeFeeFromOut(tokenOut);
         if (!isFeeFromOut) {
-            uint256 fee = takeFee(tokenIn, params.amountIn);
+            uint256 fee = takeFee(tokenIn, params.amountIn, isFeeFromOut);
             params.amountIn = params.amountIn - fee;
         }
 
@@ -824,7 +836,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             params.recipient = address(this);
             amountOut = aeroV3Router.exactInput(params);
 
-            uint fee = takeFee(tokenOut, amountOut);
+            uint fee = takeFee(tokenOut, amountOut, isFeeFromOut);
             amountOut = amountOut - fee;
 
             if (nativeOut) {
