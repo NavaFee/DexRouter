@@ -26,15 +26,12 @@ module.exports = async function ({ getNamedAccounts, deployments }) {
     waitConfirmations: network.config.blockConfirmations || 1,
   });
   console.log("合约部署地址:", dexRouter.address);
-  const data = `\nDEX_ROUTER=${dexRouter.address}`;
-  // fs.writeFileSync(`./.env`, data); 追加到文件末尾
-  fs.appendFileSync(`./.env`, data);
+  // const data = `\nDEX_ROUTER=${dexRouter.address}`;
+  // // fs.writeFileSync(`./.env`, data); 追加到文件末尾
+  // fs.appendFileSync(`./.env`, data);
 
   const feeToken = [process.env.BASE_USDC, process.env.BASE_USDT];
   const isFee = [true, true];
-
-  
-
 
   log("------------------------------------");
 };

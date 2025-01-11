@@ -89,7 +89,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
     ) internal returns (uint256) {
         uint256 fee = amountIn.mul(feeRate).div(FEE_DENOMINATOR);
         if (isFeeFromOut) {
-            IERC20(tokenIn).safeTransferFrom(address(this), feeCollector, fee);
+            IERC20(tokenIn).safeTransfer(feeCollector, fee);
         } else {
             if (
                 (tokenIn == address(0) || tokenIn == WETH) &&

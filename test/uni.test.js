@@ -71,6 +71,78 @@ describe("UniswapTrade", function () {
       "0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825"
     );
 
+    // 通过swap 给 owner 准备交易资金
+    // virtual
+    await dexRouter.swapV2ExactIn(
+      ethers.ZeroAddress,
+      virtual.target,
+      ethers.parseEther("1"),
+      0,
+      "0xE31c372a7Af875b3B5E0F3713B17ef51556da667",
+      {
+        value: ethers.parseEther("1"),
+      }
+    );
+
+    // usdc
+    await dexRouter.swapV2ExactIn(
+      ethers.ZeroAddress,
+      usdc.target,
+      ethers.parseEther("10"),
+      0,
+      "0x88A43bbDF9D098eEC7bCEda4e2494615dfD9bB9C",
+      {
+        value: ethers.parseEther("10"),
+      }
+    );
+
+    // luna
+
+    // approve
+    await usdc.approve(dexRouter.target, ethers.parseUnits("6000", 6));
+
+    const params = {
+      factoryAddress: process.env.BASE_UNI_V3_FACTORY,
+      poolAddress: "0x16E0907ed813d6E0287596ce1966FF1ad7b17298", // LUNA/USDC pool
+      tokenIn: process.env.BASE_USDC,
+      tokenOut: process.env.BASE_LUNA,
+      fee: 10000,
+      recipient: owner.address,
+      deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+      amountIn: ethers.parseUnits("5000", 6),
+      amountOutMinimum: 0,
+      sqrtPriceLimitX96: 0,
+    };
+
+    await dexRouter.swapV3ExactIn(params);
+
+    // aixbt
+
+    await dexRouter.swapV3ExactIn({
+      factoryAddress: process.env.BASE_UNI_V3_FACTORY,
+      poolAddress: "0xf1Fdc83c3A336bdbDC9fB06e318B08EadDC82FF4", // Aixbt/USDC pool
+      tokenIn: process.env.BASE_USDC,
+      tokenOut: "0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825",
+      fee: 3000,
+      recipient: owner.address,
+      deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+      amountIn: ethers.parseUnits("1000", 6),
+      amountOutMinimum: 0,
+      sqrtPriceLimitX96: 0,
+    });
+
+    console.log(
+      "owner balance:",
+      await ethers.provider.getBalance(owner.address)
+    );
+    console.log(
+      "owner virtual balance:",
+      await virtual.balanceOf(owner.address)
+    );
+    console.log("owner luna balance:", await luna.balanceOf(owner.address));
+    console.log("owner usdc balance:", await usdc.balanceOf(owner.address));
+    console.log("owner aixbt balance:", await aixbt.balanceOf(owner.address));
+
     return { dexRouter, weth, virtual, usdc, luna, aixbt, owner, feeCollector };
   }
 
