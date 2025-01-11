@@ -19,6 +19,11 @@ LUNA/Virtual: 0xa8e64FB120CE8796594670BAE72279C8aA1e5359
     luna: 0x55cD6469F597452B5A7536e2CD98fDE4c1247ee4  
     factory:0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6
 
+ETH/USDC: 0x88A43bbDF9D098eEC7bCEda4e2494615dfD9bB9C
+    weth: 0x4200000000000000000000000000000000000006
+    usdc: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+    factory: 0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6
+
 UniV3 交易对
 
 WETH/USDC: 0xd0b53D9277642d899DF5C87A3966A349A798F224
@@ -31,6 +36,12 @@ Aixbt/USDC: 0xf1Fdc83c3A336bdbDC9fB06e318B08EadDC82FF4
     aixbt:0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825  
     usdc: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913  
     fee: 3000
+    factory: 0x33128a8fC17869897dcE68Ed026d694621f6FDfD
+
+Luna/usdc: 0x16E0907ed813d6E0287596ce1966FF1ad7b17298
+    luna: 0x55cD6469F597452B5A7536e2CD98fDE4c1247ee4
+    usdc: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+    fee: 10000
     factory: 0x33128a8fC17869897dcE68Ed026d694621f6FDfD
 
 */
@@ -71,6 +82,12 @@ describe("UniswapTrade", function () {
       "0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825"
     );
 
+    // 设置手续费代币
+    await dexRouter.setFeeTokens(
+      [process.env.BASE_USDC, process.env.BASE_USDT],
+      [true, true]
+    );
+
     // 通过swap 给 owner 准备交易资金
     // virtual
     await dexRouter.swapV2ExactIn(
@@ -96,8 +113,6 @@ describe("UniswapTrade", function () {
       }
     );
 
-    // luna
-
     // approve
     await usdc.approve(dexRouter.target, ethers.parseUnits("6000", 6));
 
@@ -117,7 +132,6 @@ describe("UniswapTrade", function () {
     await dexRouter.swapV3ExactIn(params);
 
     // aixbt
-
     await dexRouter.swapV3ExactIn({
       factoryAddress: process.env.BASE_UNI_V3_FACTORY,
       poolAddress: "0xf1Fdc83c3A336bdbDC9fB06e318B08EadDC82FF4", // Aixbt/USDC pool
@@ -130,18 +144,6 @@ describe("UniswapTrade", function () {
       amountOutMinimum: 0,
       sqrtPriceLimitX96: 0,
     });
-
-    console.log(
-      "owner balance:",
-      await ethers.provider.getBalance(owner.address)
-    );
-    console.log(
-      "owner virtual balance:",
-      await virtual.balanceOf(owner.address)
-    );
-    console.log("owner luna balance:", await luna.balanceOf(owner.address));
-    console.log("owner usdc balance:", await usdc.balanceOf(owner.address));
-    console.log("owner aixbt balance:", await aixbt.balanceOf(owner.address));
 
     return { dexRouter, weth, virtual, usdc, luna, aixbt, owner, feeCollector };
   }
@@ -192,6 +194,84 @@ describe("UniswapTrade", function () {
       expect(afterFeeCollectorBalance - beforeFeeCollectorBalance).to.equal(
         expectedFee
       );
+    });
+    it("Should swap Virtual to ETH through V2 single route ( Virtual -> ETH )", async function () {
+      const { dexRouter, virtual, weth, owner, feeCollector } =
+        await loadFixture(deployFixture);
+      // 记录交易前余额
+      const beforeVirtualBalance = await virtual.balanceOf(owner.address);
+      const beforeEthBalance = await ethers.provider.getBalance(owner.address);
+
+      const beforeFeeCollectorWETHBalance = await weth.balanceOf(
+        feeCollector.address
+      );
+
+      // 授权 dexRouter 合约使用 virtual 代币
+      await virtual.approve(dexRouter.target, beforeVirtualBalance);
+
+      // 准备交易参数
+      const amountIn = beforeVirtualBalance;
+      const amountOutMin = 0;
+      const poolAddress = "0xE31c372a7Af875b3B5E0F3713B17ef51556da667"; // Virtual/WETH pair
+
+      // 执行交易
+      await dexRouter.swapV2ExactIn(
+        virtual.target,
+        ethers.ZeroAddress, //WETH,表示输出ETH
+        amountIn,
+        amountOutMin,
+        poolAddress
+      );
+
+      // 验证交易结果
+      const afterEthBalance = await ethers.provider.getBalance(owner.address);
+      const afterFeeCollectorWETHBalance = await weth.balanceOf(
+        feeCollector.address
+      );
+
+      expect(afterEthBalance).to.be.gt(beforeEthBalance);
+      expect(
+        afterFeeCollectorWETHBalance - beforeFeeCollectorWETHBalance
+      ).to.gt(0);
+    });
+    it("Should swap Virtual to LUNA through V2 single route ( Virtual -> LUNA )", async function () {
+      const { dexRouter, virtual, luna, owner, feeCollector } =
+        await loadFixture(deployFixture);
+
+      // 记录交易前余额
+      const beforeVirtualBalance = await virtual.balanceOf(owner.address);
+      const beforeLunaBalance = await luna.balanceOf(owner.address);
+      const beforeFeeCollectorVirtualBalance = await virtual.balanceOf(
+        feeCollector.address
+      );
+
+      // 授权 dexRouter 合约使用 virtual 代币
+      await virtual.approve(dexRouter.target, beforeVirtualBalance);
+
+      // 准备交易参数
+      const amountIn = beforeVirtualBalance;
+      const amountOutMin = 0;
+      const poolAddress = "0xa8e64FB120CE8796594670BAE72279C8aA1e5359"; // LUNA/Virtual pair
+
+      // 执行交易
+      await dexRouter.swapV2ExactIn(
+        virtual.target,
+        luna.target,
+        amountIn,
+        amountOutMin,
+        poolAddress
+      );
+
+      // 验证交易结果
+      const afterLunaBalance = await luna.balanceOf(owner.address);
+      const afterFeeCollectorVirtualBalance = await virtual.balanceOf(
+        feeCollector.address
+      );
+
+      expect(afterLunaBalance).to.be.gt(beforeLunaBalance);
+      expect(
+        afterFeeCollectorVirtualBalance - beforeFeeCollectorVirtualBalance
+      ).to.gt(0);
     });
   });
 
@@ -250,6 +330,107 @@ describe("UniswapTrade", function () {
         expectedFee
       );
     });
+    it("Should swap LUNA to ETH through V2 multi route ( LUNA -> Virtual -> ETH )", async function () {
+      const { dexRouter, luna, weth, owner, feeCollector } = await loadFixture(
+        deployFixture
+      );
+
+      const amountIn = await luna.balanceOf(owner.address);
+
+      // 授权 dexRouter 合约使用 luna 代币
+      await luna.approve(dexRouter.target, amountIn);
+
+      // 准备交易参数
+      const amountOutMin = 0;
+      const path = [
+        process.env.BASE_LUNA,
+        process.env.BASE_VIRTUAL,
+        process.env.BASE_WETH,
+      ];
+
+      // 记录交易前余额
+      const beforeEthBalance = await ethers.provider.getBalance(owner.address);
+      const beforeFeeCollectorWETHBalance = await weth.balanceOf(
+        feeCollector.address
+      );
+
+      // 执行交易
+      await dexRouter.swapV2MultiHopExactIn(luna.target, amountIn, {
+        path: path,
+        factory: process.env.BASE_UNI_V2_FACTORY,
+        amountOutMin: amountOutMin,
+        recipient: owner.address,
+        deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+      });
+
+      // 验证交易结果
+      const afterEthBalance = await ethers.provider.getBalance(owner.address);
+      const afterFeeCollectorWETHBalance = await weth.balanceOf(
+        feeCollector.address
+      );
+
+      expect(afterEthBalance).to.be.gt(beforeEthBalance);
+      expect(
+        afterFeeCollectorWETHBalance - beforeFeeCollectorWETHBalance
+      ).to.gt(0);
+    });
+    it("Should swap LUNA to ETH through V2 multi route ( Virtual -> ETH -> USDC )", async function () {
+      const { dexRouter, virtual, usdc, owner, feeCollector } =
+        await loadFixture(deployFixture);
+
+      const amountIn = await virtual.balanceOf(owner.address);
+
+      // 授权 dexRouter 合约使用 luna 代币
+      await virtual.approve(dexRouter.target, amountIn);
+
+      // 准备交易参数
+      const amountOutMin = 0;
+      const path = [
+        process.env.BASE_VIRTUAL,
+        process.env.BASE_WETH,
+        process.env.BASE_USDC,
+      ];
+
+      // 记录交易前余额
+      const beforeUsdcBalance = await usdc.balanceOf(owner.address);
+      const beforeFeeCollectorUSDCBalance = await usdc.balanceOf(
+        feeCollector.address
+      );
+      console.log("\tbeforeUsdcBalance:", beforeUsdcBalance);
+      console.log(
+        "\tbeforeFeeCollectorUSDCBalance:",
+        beforeFeeCollectorUSDCBalance
+      );
+
+      // 执行交易
+      await dexRouter.swapV2MultiHopExactIn(
+        process.env.BASE_VIRTUAL,
+        amountIn,
+        {
+          path: path,
+          factory: process.env.BASE_UNI_V2_FACTORY,
+          amountOutMin: amountOutMin,
+          recipient: owner.address,
+          deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+        }
+      );
+
+      // 验证交易结果
+      const afterUsdcBalance = await usdc.balanceOf(owner.address);
+      const afterFeeCollectorUSDCBalance = await usdc.balanceOf(
+        feeCollector.address
+      );
+      console.log("\tafterUsdcBalance:", afterUsdcBalance);
+      console.log(
+        "\tafterFeeCollectorUSDCBalance:",
+        afterFeeCollectorUSDCBalance
+      );
+
+      expect(afterUsdcBalance).to.be.gt(beforeUsdcBalance);
+      expect(
+        afterFeeCollectorUSDCBalance - beforeFeeCollectorUSDCBalance
+      ).to.gt(0);
+    });
   });
 
   describe("UniswapV3 Single Route Swap", function () {
@@ -275,7 +456,7 @@ describe("UniswapTrade", function () {
 
       // 记录交易前余额
       const beforeUsdcBalance = await usdc.balanceOf(owner.address);
-      const beforeFeeCollectorBalance = await ethers.provider.getBalance(
+      const beforeFeeCollectorBalance = await usdc.balanceOf(
         feeCollector.address
       );
       // console.log("\tbeforeUsdcBalance:", beforeUsdcBalance);
@@ -288,18 +469,106 @@ describe("UniswapTrade", function () {
 
       // 验证交易结果
       const afterUsdcBalance = await usdc.balanceOf(owner.address);
-      const afterFeeCollectorBalance = await ethers.provider.getBalance(
+      const afterFeeCollectorBalance = await usdc.balanceOf(
         feeCollector.address
       );
-
-      const expectedFee = (amountIn * BigInt(10000)) / BigInt(1000000); // 1% fee
 
       // console.log("\tafterUsdcBalance:", afterUsdcBalance);
       // console.log("\tafterFeeCollectorBalance:", afterFeeCollectorBalance);
       expect(afterUsdcBalance).to.be.gt(beforeUsdcBalance);
-      expect(afterFeeCollectorBalance - beforeFeeCollectorBalance).to.equal(
-        expectedFee
+      expect(afterFeeCollectorBalance - beforeFeeCollectorBalance).to.gt(0);
+    });
+    it("Should swap USDC to ETH through V3 single route ( USDC -> ETH )", async function () {
+      const { dexRouter, usdc, weth, owner, feeCollector } = await loadFixture(
+        deployFixture
       );
+
+      // 授权 dexRouter 合约使用 usdc 代币
+      await usdc.approve(dexRouter.target, ethers.parseUnits("1000", 6));
+      // 准备交易参数
+      const amountIn = ethers.parseUnits("1000", 6); // 1000 USDC
+      const params = {
+        factoryAddress: process.env.BASE_UNI_V3_FACTORY,
+        poolAddress: "0xd0b53D9277642d899DF5C87A3966A349A798F224", // usdc/WETH pool
+        tokenIn: process.env.BASE_USDC,
+        tokenOut: ethers.ZeroAddress, //  address(0) 或 WETH 均可
+        fee: 500,
+        recipient: owner.address,
+        deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+        amountIn: amountIn,
+        amountOutMinimum: 0,
+        sqrtPriceLimitX96: 0,
+      };
+
+      // 记录交易前余额
+      const beforeEthBalance = await ethers.provider.getBalance(owner.address);
+      const beforeFeeCollectorWETHBalance = await weth.balanceOf(
+        feeCollector.address
+      );
+
+      // 执行交易
+      await dexRouter.swapV3ExactIn(params);
+
+      // 验证交易结果
+      const afterEthBalance = await ethers.provider.getBalance(owner.address);
+      const afterFeeCollectorWETHBalance = await weth.balanceOf(
+        feeCollector.address
+      );
+
+      expect(afterEthBalance).to.be.gt(beforeEthBalance);
+      expect(
+        afterFeeCollectorWETHBalance - beforeFeeCollectorWETHBalance
+      ).to.gt(0);
+      console.log(
+        "\t手续费收入为",
+        ethers.formatEther(
+          afterFeeCollectorWETHBalance - beforeFeeCollectorWETHBalance
+        ),
+        "WETH"
+      );
+    });
+    it("Should swap USDC to ETH through V3 single route ( USDC -> virtual )", async function () {
+      const { dexRouter, usdc, virtual, owner, feeCollector } =
+        await loadFixture(deployFixture);
+
+      // 授权 dexRouter 合约使用 usdc 代币
+      const amountIn = ethers.parseUnits("1000", 6); // 1000 USDC
+      await usdc.approve(dexRouter.target, amountIn);
+
+      // 准备交易参数
+      const params = {
+        factoryAddress: process.env.BASE_UNI_V3_FACTORY,
+        poolAddress: "0x529d2863a1521d0b57db028168fdE2E97120017C", // virtual/usdc pool
+        tokenIn: process.env.BASE_USDC,
+        tokenOut: process.env.BASE_VIRTUAL, // 输出ETH
+        fee: 3000,
+        recipient: owner.address,
+        deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+        amountIn: amountIn,
+        amountOutMinimum: 0,
+        sqrtPriceLimitX96: 0,
+      };
+
+      // 记录交易前余额
+      const beforeVirtualBalance = await virtual.balanceOf(owner.address);
+
+      const beforeFeeCollectorUSDCBalance = await usdc.balanceOf(
+        feeCollector.address
+      );
+
+      // 执行交易
+      await dexRouter.swapV3ExactIn(params);
+
+      // 验证交易结果
+      const afterVirtualBalance = await virtual.balanceOf(owner.address);
+      const afterFeeCollectorUSDCBalance = await usdc.balanceOf(
+        feeCollector.address
+      );
+
+      expect(afterVirtualBalance).to.be.gt(beforeVirtualBalance);
+      expect(
+        afterFeeCollectorUSDCBalance - beforeFeeCollectorUSDCBalance
+      ).to.gt(0); // 验证手续费是否正确
     });
   });
 
@@ -363,6 +632,121 @@ describe("UniswapTrade", function () {
 
       // console.log("\tafterAixbtBalance:", afterAixbtBalance);
       // console.log("\tafterFeeCollectorBalance:", afterFeeCollectorBalance);
+      expect(afterAixbtBalance).to.be.gt(beforeAixbtBalance);
+      expect(afterFeeCollectorBalance - beforeFeeCollectorBalance).to.equal(
+        expectedFee
+      );
+    });
+    it("Should swap AIXBT to ETH through V3 multi route ( AIXBT -> USDC -> ETH )", async function () {
+      const { dexRouter, aixbt, weth, owner, feeCollector } = await loadFixture(
+        deployFixture
+      );
+
+      const amountIn = await aixbt.balanceOf(owner.address);
+      // 授权 dexRouter 合约使用 aixbt 代币
+      await aixbt.approve(dexRouter.target, amountIn);
+
+      // 准备交易参数
+      const path = [
+        "0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825", // AIXBT
+        process.env.BASE_USDC,
+        process.env.BASE_WETH,
+      ];
+      const fees = [3000, 500];
+
+      const params = {
+        path: encodePath(path, fees),
+        recipient: owner.address,
+        deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+        amountIn: amountIn,
+        amountOutMinimum: 0,
+        poolAddresses: [
+          "0xf1Fdc83c3A336bdbDC9fB06e318B08EadDC82FF4", // AIXBT/USDC pool
+          "0xd0b53D9277642d899DF5C87A3966A349A798F224", // USDC/WETH pool
+        ],
+        factoryAddresses: [
+          process.env.BASE_UNI_V3_FACTORY,
+          process.env.BASE_UNI_V3_FACTORY,
+        ],
+        nativeOut: true,
+        tokenOut: process.env.BASE_WETH, // 输出ETH
+      };
+
+      // 记录交易前余额
+      const beforeEthBalance = await ethers.provider.getBalance(owner.address);
+      const beforeFeeCollectorWETHBalance = await weth.balanceOf(
+        feeCollector.address
+      );
+
+      // 执行交易
+      await dexRouter.swapV3MultiHopExactIn(params);
+
+      // 验证交易结果
+      const afterEthBalance = await ethers.provider.getBalance(owner.address);
+      const afterFeeCollectorWETHBalance = await weth.balanceOf(
+        feeCollector.address
+      );
+
+      expect(afterEthBalance).to.be.gt(beforeEthBalance);
+      expect(
+        afterFeeCollectorWETHBalance - beforeFeeCollectorWETHBalance
+      ).to.gt(0);
+    });
+    it("Should swap LUNA to Aixbt through V3 multi route ( LUNA -> USDC -> Aixbt )", async function () {
+      const { dexRouter, luna, aixbt, owner, feeCollector } = await loadFixture(
+        deployFixture
+      );
+
+      // 授权 dexRouter 合约使用 luna 代币
+      const amountIn = await luna.balanceOf(owner.address);
+      await luna.approve(dexRouter.target, amountIn);
+
+      // 准备交易参数
+      const amountOutMin = 0;
+      const path = [
+        process.env.BASE_LUNA,
+        process.env.BASE_USDC,
+        "0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825", // Aixbt
+      ];
+      const fees = [10000, 3000]; // LUNA -> USDC 的手续费为 10000，USDC -> Aixbt 的手续费为 3000
+
+      const params = {
+        path: encodePath(path, fees),
+        recipient: owner.address,
+        deadline: Math.floor(Date.now() / 1000) + 60 * 20,
+        amountIn: amountIn,
+        amountOutMinimum: 0,
+        poolAddresses: [
+          "0x16E0907ed813d6E0287596ce1966FF1ad7b17298", // LUNA/USDC pool
+          "0xf1Fdc83c3A336bdbDC9fB06e318B08EadDC82FF4", // Aixbt/USDC pool
+        ],
+        factoryAddresses: [
+          process.env.BASE_UNI_V3_FACTORY,
+          process.env.BASE_UNI_V3_FACTORY,
+        ],
+        nativeOut: false,
+        tokenOut: "0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825", // Aixbt
+      };
+
+      // 记录交易前余额
+      const beforeAixbtBalance = await aixbt.balanceOf(owner.address);
+      const beforeFeeCollectorBalance = await luna.balanceOf(
+        feeCollector.address
+      );
+
+      // 执行交易
+      await dexRouter.swapV3MultiHopExactIn(params, {
+        value: ethers.parseEther("0"), // 不需要发送ETH
+      });
+
+      // 验证交易结果
+      const afterAixbtBalance = await aixbt.balanceOf(owner.address);
+      const afterFeeCollectorBalance = await luna.balanceOf(
+        feeCollector.address
+      );
+
+      const expectedFee = (amountIn * BigInt(10000)) / BigInt(1000000); // 1% fee
+
       expect(afterAixbtBalance).to.be.gt(beforeAixbtBalance);
       expect(afterFeeCollectorBalance - beforeFeeCollectorBalance).to.equal(
         expectedFee

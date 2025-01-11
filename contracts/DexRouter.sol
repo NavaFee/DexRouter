@@ -176,6 +176,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         pair.swap(amount0Out, amount1Out, to, new bytes(0));
 
         if (nativeOut || isFeeFromOut) {
+            tokenOut = nativeOut ? WETH : tokenOut;
             amountOut = IERC20(tokenOut).balanceOf(address(this)).sub(
                 balanceBefore
             );
@@ -486,7 +487,12 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         }
 
         bool nativeOut = false;
-        if (params.tokenOut == WETH) nativeOut = true;
+        if (params.tokenOut == WETH || params.tokenOut == address(0)) {
+            nativeOut = true;
+            params.tokenOut = params.tokenOut == address(0)
+                ? WETH
+                : params.tokenOut;
+        }
 
         if (!isFeeFromOut) {
             uint256 fee = takeFee(
