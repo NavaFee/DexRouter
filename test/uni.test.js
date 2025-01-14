@@ -19,7 +19,7 @@ LUNA/Virtual: 0xa8e64FB120CE8796594670BAE72279C8aA1e5359
     luna: 0x55cD6469F597452B5A7536e2CD98fDE4c1247ee4  
     factory:0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6
 
-ETH/USDC: 0x88A43bbDF9D098eEC7bCEda4e2494615dfD9bB9C
+WETH/USDC: 0x88A43bbDF9D098eEC7bCEda4e2494615dfD9bB9C
     weth: 0x4200000000000000000000000000000000000006
     usdc: 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
     factory: 0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6
@@ -314,6 +314,7 @@ describe("UniswapTrade", function () {
         }
       );
 
+   
       // 验证交易结果
       const afterLunaBalance = await luna.balanceOf(owner.address);
       const afterFeeCollectorBalance = await ethers.provider.getBalance(
@@ -601,7 +602,6 @@ describe("UniswapTrade", function () {
           process.env.BASE_UNI_V3_FACTORY,
           process.env.BASE_UNI_V3_FACTORY,
         ],
-        nativeOut: false,
         tokenOut: "0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825",
       };
 
@@ -668,8 +668,7 @@ describe("UniswapTrade", function () {
           process.env.BASE_UNI_V3_FACTORY,
           process.env.BASE_UNI_V3_FACTORY,
         ],
-        nativeOut: true,
-        tokenOut: process.env.BASE_WETH, // 输出ETH
+        tokenOut: ethers.ZeroAddress, // 输出ETH
       };
 
       // 记录交易前余额
@@ -724,7 +723,6 @@ describe("UniswapTrade", function () {
           process.env.BASE_UNI_V3_FACTORY,
           process.env.BASE_UNI_V3_FACTORY,
         ],
-        nativeOut: false,
         tokenOut: "0x4F9Fd6Be4a90f2620860d680c0d4d5Fb53d1A825", // Aixbt
       };
 

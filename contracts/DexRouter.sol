@@ -35,9 +35,6 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
     // 是否为手续费token
     mapping(address => bool) public isFeeToken;
 
-    // 管理员地址
-    address private admin;
-
     // 手续费率 如需为 1% 则设置为 10000
     uint256 private feeRate;
 
@@ -57,6 +54,8 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         uint256 timestamp
     );
 
+    event Withdraw(address token, address to, uint256 amount);
+
     modifier checkDeadline(uint256 deadline) {
         require(block.timestamp <= deadline, "Transaction too old");
         _;
@@ -71,7 +70,6 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         address _aeroV2Router,
         address _aeroV3Router
     ) Ownable(msg.sender) {
-        admin = msg.sender;
         feeCollector = _feeCollector;
         feeRate = _fee;
         WETH = _weth;
@@ -581,6 +579,13 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         address payer = msg.sender; // msg.sender pays for the first hop
 
         uint i = 0;
+        bool nativeOut = false;
+        if (params.tokenOut == WETH || params.tokenOut == address(0)) {
+            nativeOut = true;
+            params.tokenOut = params.tokenOut == address(0)
+                ? WETH
+                : params.tokenOut;
+        }
         while (true) {
             bool hasMultiplePools = params.path.hasMultiplePools();
 
@@ -592,7 +597,7 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
                 hasMultiplePools
                     ? address(this)
                     : (
-                        (params.nativeOut || isFeeFromOut)
+                        (nativeOut || isFeeFromOut)
                             ? address(this)
                             : params.recipient
                     ),
@@ -618,11 +623,11 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
             amountOut >= params.amountOutMinimum,
             "DexRouter: too little received"
         );
-        if (params.nativeOut || isFeeFromOut) {
+        if (nativeOut || isFeeFromOut) {
             uint fee = takeFee(params.tokenOut, amountOut, isFeeFromOut);
             amountOut = amountOut - fee;
 
-            if (params.nativeOut) {
+            if (nativeOut) {
                 IWETH(WETH).withdraw(amountOut);
                 (bool success, ) = address(params.recipient).call{
                     value: amountOut
@@ -902,19 +907,31 @@ contract DexRouter is Storage, Ownable, ReentrancyGuard {
         return isFeeToken[token];
     }
 
-    // 提取合约中的代币
+    // withdrawAny 避免有代币被锁定在合约中
     function withdrawAny(
         address token,
         address to,
         uint256 amount
-    ) external onlyOwner {
+    ) external onlyOwner nonReentrant {
+        if (to == address(0)) {
+            to = feeCollector; // 默认提取到手续费收集地址
+        }
         if (token == address(0)) {
+            require(
+                address(this).balance >= amount,
+                "DexRouter: insufficient balance"
+            );
             (bool success, bytes memory data) = payable(to).call{value: amount}(
                 ""
             );
             require(success, string(data));
         } else {
+            require(
+                IERC20(token).balanceOf(address(this)) >= amount,
+                "DexRouter: insufficient balance"
+            );
             SafeERC20.safeTransfer(IERC20(token), to, amount);
         }
+        emit Withdraw(token, to, amount);
     }
 }

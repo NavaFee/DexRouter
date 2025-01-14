@@ -4,13 +4,14 @@ require("dotenv").config();
 const fs = require("fs");
 
 module.exports = async function ({ getNamedAccounts, deployments }) {
-  if (network.name !== "hardhat") {
-    console.log("This script is only for local testing");
+  if (network.name !== "mainnet") {
+    console.log("This script is only for mainnet");
     return;
   }
   const { deploy, log } = deployments;
   const { deployer } = await getNamedAccounts();
-  const feeCollector = process.env.FeeCollector;
+  console.log("deployer:", deployer);
+  const feeCollector = deployer;
   const fee = 10000;
   const weth = process.env.ETH_SEPOLIA_WETH;
   const aeroV2Router = process.env.BASE_AERO_V2_ROUTER;
@@ -27,9 +28,6 @@ module.exports = async function ({ getNamedAccounts, deployments }) {
     waitConfirmations: network.config.blockConfirmations || 1,
   });
   console.log("合约部署地址:", dexRouter.address);
-  // const data = `\nDEX_ROUTER=${dexRouter.address}`;
-  // // fs.writeFileSync(`./.env`, data); 追加到文件末尾
-  // fs.appendFileSync(`./.env`, data);
 
   const feeToken = [process.env.BASE_USDC, process.env.BASE_USDT];
   const isFee = [true, true];
@@ -37,4 +35,4 @@ module.exports = async function ({ getNamedAccounts, deployments }) {
   log("------------------------------------");
 };
 
-module.exports.tags = ["all", "dexRouter", "hardhat"];
+module.exports.tags = ["all", "dexRouter", "mainnet"];
